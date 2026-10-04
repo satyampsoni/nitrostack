@@ -168,6 +168,12 @@ Talk to your MCP server through an integrated AI assistant.
 | [CLI Reference](https://docs.nitrostack.ai/cli/introduction) | All CLI commands and options |
 | [Deployment](https://docs.nitrostack.ai/deployment/checklist) | Production checklist, Docker, cloud platforms |
 
+## Who's building with NitroStack
+
+Teams shipping MCP servers and AI-native products with NitroStack. Names and links are in [users.md](./users.md).
+
+[Nimrobo AI](https://www.nimroboai.com/) · [Baack](https://www.baack.co/) · [SmartPost](https://smartpostapp.com/) · [Letivo](https://letivo.co.uk/) · [Devtron](https://www.devtron.ai) · [Konfhub](https://konfhub.com/) · [Ipxo](https://ipxo.com) · [Eigen](https://eigen.so/) · [Cognerd](https://www.cognerd.ai/) · [APIdiffguard](https://apidiffguard.com/) 
+
 ## Community
 
 - [Discord](https://discord.gg/uVWey6UhuD) — Ask questions, share projects, get help
