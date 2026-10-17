@@ -20,6 +20,14 @@ import {
 import { trackEvent, shutdownAnalytics } from '../analytics/posthog.js';
 import { runSkillsFlow } from '../skills/index.js';
 import { writeCanonicalGitignore } from '../pack/canonical-gitignore.js';
+import {
+  jsStringLiteral,
+  sanitizeServerName,
+  toValidNpmPackageName,
+  updateAppModuleServerName,
+  updateIndexTsServerName,
+  updateWidgetsPackageName,
+} from '../scaffold/template-sync.js';
 import readline from 'readline';
 
 /**
@@ -139,12 +147,26 @@ function isLocalDevelopment(): boolean {
   return __dirname.includes('/src/cli/') || __dirname.includes('\\src\\cli\\');
 }
 
-interface InitOptions {
+export interface InitOptions {
   template?: string;
+  preset?: string;
   description?: string;
   author?: string;
   skipInstall?: boolean;
   force?: boolean;
+}
+
+export const PRESET_ALIASES: Record<string, string> = {
+  'enterprise-search': 'typescript-enterprise-search',
+  'code-mode': 'typescript-code-mode',
+  'starter': 'typescript-starter',
+  'pizzaz': 'typescript-pizzaz',
+  'oauth': 'typescript-oauth',
+};
+
+export function resolveTemplateName(options: InitOptions, promptedValue?: string): string {
+  const rawChoice = options.preset || options.template || promptedValue || 'typescript-starter';
+  return PRESET_ALIASES[rawChoice] || rawChoice;
 }
 
 export async function initCommand(projectName: string | undefined, options: InitOptions) {
@@ -203,23 +225,31 @@ export async function initCommand(projectName: string | undefined, options: Init
       {
         type: 'list',
         name: 'template',
-        message: chalk.white('Choose a template:'),
+        message: chalk.white('Choose a project template:'),
         choices: [
           {
-            name: `${brand.signal('Starter')}     ${chalk.dim('Simple calculator for learning basics')}`,
+            name: `${brand.signal('Starter')}           ${chalk.dim('Simple calculator for learning basics')}`,
             value: 'typescript-starter',
           },
           {
-            name: `${brand.signal('Advanced')}    ${chalk.dim('Pizza shop finder with maps & widgets')}`,
+            name: `${brand.signal('Enterprise Search')} ${chalk.dim('BM25 progressive tool discovery for large catalogs')}`,
+            value: 'typescript-enterprise-search',
+          },
+          {
+            name: `${brand.signal('Code Mode')}         ${chalk.dim('Sandboxed QuickJS WASM runtime for token reduction')}`,
+            value: 'typescript-code-mode',
+          },
+          {
+            name: `${brand.signal('Advanced')}          ${chalk.dim('Pizza shop finder with maps & widgets')}`,
             value: 'typescript-pizzaz',
           },
           {
-            name: `${brand.signal('Flight booking')}  ${chalk.dim('Flight booking with OAuth 2.1 auth')}`,
+            name: `${brand.signal('OAuth Auth')}        ${chalk.dim('Flight booking with OAuth 2.1 authentication')}`,
             value: 'typescript-oauth',
           },
         ],
         default: 'typescript-starter',
-        when: !options.template,
+        when: !options.preset && !options.template,
       },
       {
         type: 'input',
@@ -238,7 +268,7 @@ export async function initCommand(projectName: string | undefined, options: Init
     ]);
 
     // Merge flag values with prompt answers
-    const finalTemplate = options.template || answers.template || 'typescript-starter';
+    const finalTemplate = resolveTemplateName(options, answers.template);
     const finalDescription = options.description || answers.description || 'My awesome MCP server';
     const finalAuthor = options.author || answers.author || '';
 
@@ -274,10 +304,28 @@ export async function initCommand(projectName: string | undefined, options: Init
     const packageJsonPath = path.join(targetDir, 'package.json');
     if (fs.existsSync(packageJsonPath)) {
       const packageJson = fs.readJSONSync(packageJsonPath);
-      packageJson.name = finalProjectName;
+      packageJson.name = toValidNpmPackageName(finalProjectName);
       packageJson.description = finalDescription;
       packageJson.author = finalAuthor;
       fs.writeJSONSync(packageJsonPath, packageJson, { spaces: 2 });
+    }
+
+    // Synchronize MCP server identity and widget package name with final project name
+    const sanitizedServerName = sanitizeServerName(finalProjectName);
+    const appModulePath = path.join(targetDir, 'src', 'app.module.ts');
+    if (fs.existsSync(appModulePath)) {
+      const serverNameUpdated = updateAppModuleServerName(targetDir, sanitizedServerName);
+      if (!serverNameUpdated) {
+        log(`Notice: Could not automatically update server name in src/app.module.ts. Please verify @McpApp server.name.`, 'warning');
+      }
+    }
+    const indexTsPath = path.join(targetDir, 'src', 'index.ts');
+    if (fs.existsSync(indexTsPath)) {
+      updateIndexTsServerName(targetDir, sanitizedServerName);
+    }
+    const widgetsPkgPath = path.join(targetDir, 'src', 'widgets', 'package.json');
+    if (fs.existsSync(widgetsPkgPath) && !updateWidgetsPackageName(targetDir, finalProjectName)) {
+      log(`Notice: Could not automatically update name in src/widgets/package.json.`, 'warning');
     }
 
     spinner.succeed('Project created');
@@ -412,7 +460,7 @@ async function createProjectFromScratch(
   answers: ProjectAnswers
 ) {
   const packageJson = {
-    name: projectName,
+    name: toValidNpmPackageName(projectName),
     version: '1.0.0',
     description: answers.description,
     author: answers.author,
@@ -453,12 +501,13 @@ async function createProjectFromScratch(
   fs.writeJSONSync(path.join(targetDir, 'tsconfig.json'), tsconfig, { spaces: 2 });
   fs.mkdirSync(path.join(targetDir, 'src'), { recursive: true });
 
+  const safeServerName = sanitizeServerName(projectName);
   const indexTs = `import { createServer, Tool, z } from '@nitrostack/core';
 
 const server = createServer({
-  name: '${projectName}',
+  name: ${jsStringLiteral(safeServerName)},
   version: '1.0.0',
-  description: '${answers.description}',
+  description: ${jsStringLiteral(answers.description)},
 });
 
 server.tool(
@@ -507,3 +556,4 @@ Built with [NitroStack](https://nitrostack.ai) ⚡
 
   fs.writeFileSync(path.join(targetDir, 'README.md'), readme);
 }
+

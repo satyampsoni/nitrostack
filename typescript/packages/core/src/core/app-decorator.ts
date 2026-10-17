@@ -1,4 +1,6 @@
 import 'reflect-metadata';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { createServer, NitroStackServer } from './server.js';
 import { createLogger } from './logger.js';
 import { DIContainer } from './di/container.js';
@@ -8,6 +10,7 @@ import { createResource } from './resource.js';
 import { isModule, getModuleMetadata, ModuleMetadata, Provider } from './module.js';
 import { buildTools, buildResources, buildPrompts } from './builders.js';
 import type { ClassConstructor } from './types.js';
+import type { McpTransform } from './transforms/index.js';
 
 /**
  * Controller instance type
@@ -111,6 +114,11 @@ export interface McpAppOptions {
    * false if the host process manages its own shutdown.
    */
   shutdownHooks?: boolean;
+
+  /**
+   * Catalog transforms pipeline for Progressive Discovery, Code Mode, etc.
+   */
+  transforms?: McpTransform[];
 }
 
 /**
@@ -135,6 +143,50 @@ export function McpApp(options: McpAppOptions): ClassDecorator {
  */
 export function getMcpAppMetadata(target: ClassConstructor): McpAppOptions | undefined {
   return Reflect.getMetadata(MCP_APP_METADATA, target) as McpAppOptions | undefined;
+}
+
+export interface PackageIdentity {
+  name?: string;
+  version?: string;
+}
+
+/**
+ * Name and version advertised by a new MCP server.
+ * Decorator fields win. Otherwise the project's own package.json is used.
+ * `npm_package_*` is intentionally ignored: npm only sets it for lifecycle
+ * scripts, and child processes inherit it from whichever package npm ran.
+ */
+export function resolveServerIdentity(
+  server: { name?: string; version?: string } | undefined,
+  manifest: PackageIdentity = {},
+): { name: string; version: string } {
+  return {
+    name: firstNonEmpty(server?.name, manifest.name) ?? 'mcp-server',
+    version: firstNonEmpty(server?.version, manifest.version) ?? '1.0.0',
+  };
+}
+
+/** Reads `package.json` from `cwd` (defaults to `process.cwd()`). Missing or invalid files yield `{}`. */
+export function readLocalPackageManifest(cwd: string = process.cwd()): PackageIdentity {
+  try {
+    const pkg = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8')) as {
+      name?: unknown;
+      version?: unknown;
+    };
+    return {
+      name: typeof pkg.name === 'string' ? pkg.name : undefined,
+      version: typeof pkg.version === 'string' ? pkg.version : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return undefined;
 }
 
 /**
@@ -278,11 +330,16 @@ export class McpApplicationFactory {
     }
 
     // Create server
+    const { name: serverName, version: serverVersion } = resolveServerIdentity(
+      options.server,
+      readLocalPackageManifest(),
+    );
     const server = createServer({
-      name: options.server?.name || 'mcp-server',
-      version: options.server?.version || '1.0.0',
+      name: serverName,
+      version: serverVersion,
       ...(options.server?.protocolVersion ? { protocolVersion: options.server.protocolVersion } : {}),
       ...(options.server?.extensions ? { extensions: options.server.extensions } : {}),
+      transforms: options.transforms || [],
     });
 
     // Now register and add dynamic modules (from forRoot() calls) to server
@@ -347,7 +404,7 @@ export class McpApplicationFactory {
 
     // Register health checks resource if any health checks exist
     const { buildHealthChecksResource } = await import('./health/health-checks.resource.js');
-    const healthChecksResourceDef = await buildHealthChecksResource();
+    const healthChecksResourceDef = await buildHealthChecksResource(server);
     const healthChecksResource = createResource({
       uri: healthChecksResourceDef.uri,
       name: healthChecksResourceDef.name,
